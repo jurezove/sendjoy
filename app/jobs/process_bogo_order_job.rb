@@ -40,49 +40,63 @@ class ProcessBogoOrderJob < ApplicationJob
 
     shop_url = ENV['SHOPIFY_SHOP_URL']
     access_token = ENV['SHOPIFY_ACCESS_TOKEN']
+    gift_product_id = ENV['GIFT_PRODUCT_ID']
 
-    session = ShopifyAPI::Auth::Session.new(
-      shop: shop_url,
-      access_token: access_token
-    )
+    session = ShopifyAPI::Auth::Session.new(shop: shop_url, access_token: access_token)
     client = ShopifyAPI::Clients::Rest::Admin.new(session: session)
+
+    # Fetch the gift product to get its first variant
+    gift_product_response = client.get(path: "products/#{gift_product_id}.json")
+    
+    if gift_product_response.success?
+      gift_product = gift_product_response.body['product']
+      gift_variant = gift_product['variants'].first
+    else
+      raise "Failed to fetch gift product: #{gift_product_response.errors.full_messages.join(', ')}"
+    end
 
     new_order = {
       email: original_order['email'],
       shipping_address: {
         first_name: find_property(bogo_item, 'Recipient Name'),
         address1: find_property(bogo_item, 'Recipient Address'),
-        city: original_order['billing_address']['city'],
-        province: original_order['billing_address']['province'],
-        country: original_order['billing_address']['country'],
-        zip: original_order['billing_address']['zip'],
-        phone: original_order['billing_address']['phone']
+        city: find_property(bogo_item, 'Recipient City'),
+        country: find_property(bogo_item, 'Recipient Country'),
+        zip: find_property(bogo_item, 'Recipient ZIP'),
+        phone: find_property(bogo_item, 'Recipient Phone')
       },
       line_items: [
         {
-          variant_id: bogo_item['variant_id'],
+          variant_id: gift_variant['id'],
           quantity: 1,
           price: '0.00'
         }
       ],
       financial_status: 'paid',
       tags: 'BOGO Gift',
-      note: 'This is a gifted item from a Buy One, Gift One promotion.'
+      note: "This is a gifted item from a Buy One, Gift One promotion. Original Order ID: #{original_order['id']}"
     }
 
-    response = client.post(
-      path: 'orders',
-      body: { "order" => new_order },
-      type: :json
-    )
-
-    Rails.logger.info "Gift order created: #{response.body['order']['id']}"
-  rescue StandardError => e
-    Rails.logger.error "Error creating gift order: #{e.message}"
-    notify_slack(original_order, is_bogo: true, error: e.message)
+    begin
+      response = client.post(
+        path: 'orders.json',
+        body: { order: new_order }
+      )
+      
+      if response.success?
+        created_order = response.body['order']
+        Rails.logger.info "Gift order created: #{created_order['id']}"
+        notify_slack(original_order, is_bogo: true, gift_order_id: created_order['id'])
+      else
+        raise "Failed to create order: #{response.errors.full_messages.join(', ')}"
+      end
+    rescue StandardError => e
+      Rails.logger.error "Error creating gift order: #{e.message}"
+      notify_slack(original_order, is_bogo: true, error: e.message)
+    end
   end
 
-  def notify_slack(order, is_bogo:, fraud_suspected: false, error: nil)
+  def notify_slack(order, is_bogo:, fraud_suspected: false, error: nil, gift_order_id: nil)
     client = Slack::Web::Client.new(token: ENV['SLACK_BOT_TOKEN'])
 
     message = {
@@ -128,11 +142,22 @@ class ProcessBogoOrderJob < ApplicationJob
         fields: [
           {
             type: "mrkdwn",
-            text: "*Recipient:*\n#{find_property(bogo_item, 'Recipient Name')}, #{find_property(bogo_item, 'Recipient Address')}"
+            text: "*Recipient:*\n#{find_property(bogo_item, 'Recipient Name')}, #{find_property(bogo_item, 'Recipient Address')}, #{find_property(bogo_item, 'Recipient City')}, #{find_property(bogo_item, 'Recipient Country')}"
           }
         ]
       }
       message[:blocks].insert(-1, recipient_info)
+
+      if gift_order_id
+        gift_order_info = {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "*Gift Order Created:* ID #{gift_order_id}"
+          }
+        }
+        message[:blocks].insert(-1, gift_order_info)
+      end
 
       if fraud_suspected
         fraud_warning = {
