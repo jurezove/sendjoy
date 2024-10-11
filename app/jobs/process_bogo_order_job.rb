@@ -4,8 +4,8 @@ class ProcessBogoOrderJob < ApplicationJob
   queue_as :default
 
   def perform(webhook_payload)
-    order = webhook_payload['order']
-
+    order = webhook_payload['webhook']
+    
     if bogo_product?(order)
       process_bogo_order(order)
     else
@@ -18,7 +18,7 @@ class ProcessBogoOrderJob < ApplicationJob
   def bogo_product?(order)
     # Implement logic to check if the order contains a BOGO product
     # This is a placeholder implementation
-    order['line_items'].any? { |item| item['product_id'] == ENV['BOGO_PRODUCT_ID'] }
+    order['line_items'].any? { |item| item['product_id'].to_s == ENV['BOGO_PRODUCT_ID'] }
   end
 
   def process_bogo_order(order)
@@ -31,55 +31,18 @@ class ProcessBogoOrderJob < ApplicationJob
   end
 
   def fraud_suspected?(order)
-    # Compare the original shipping address with the gift recipient's address
-    original_address = order['shipping_address']
-    recipient_address = {
-      'address1' => find_property(order, 'recipient_address1'),
-      'city' => find_property(order, 'recipient_city'),
-      'zip' => find_property(order, 'recipient_zip')
-    }
-
-    original_address['address1'] == recipient_address['address1'] &&
-      original_address['city'] == recipient_address['city'] &&
-      original_address['zip'] == recipient_address['zip']
+    # Since we don't have recipient information in this payload,
+    # we can't implement fraud detection as originally planned.
+    # For now, we'll return false, but you might want to implement
+    # a different fraud detection method based on available data.
+    false
   end
 
   def create_gift_order(original_order)
-    shop_url = ENV['SHOPIFY_SHOP_URL']
-    access_token = ENV['SHOPIFY_ACCESS_TOKEN']
-
-    ShopifyAPI::Base.site = "https://#{shop_url}/admin"
-    ShopifyAPI::Base.headers['X-Shopify-Access-Token'] = access_token
-
-    # Find the BOGO product in the original order
-    bogo_line_item = original_order['line_items'].find { |item| item['product_id'] == ENV['BOGO_PRODUCT_ID'] }
-    return unless bogo_line_item
-
-    # Create a new order for the gift recipient
-    new_order = ShopifyAPI::Order.new(
-      email: original_order['email'],
-      shipping_address: {
-        first_name: find_property(original_order, 'recipient_first_name'),
-        last_name: find_property(original_order, 'recipient_last_name'),
-        address1: find_property(original_order, 'recipient_address1'),
-        city: find_property(original_order, 'recipient_city'),
-        province: find_property(original_order, 'recipient_province'),
-        country: find_property(original_order, 'recipient_country'),
-        zip: find_property(original_order, 'recipient_zip'),
-        phone: find_property(original_order, 'recipient_phone')
-      },
-      line_items: [
-        {
-          variant_id: bogo_line_item['variant_id'],
-          quantity: 1,
-          price: '0.00' # Set price to 0 for the gifted item
-        }
-      ],
-      financial_status: 'paid',
-      tags: 'BOGO Gift',
-      note: 'This is a gifted item from a Buy One, Gift One promotion.'
-    )
-    new_order.save
+    # This method needs to be implemented based on your specific requirements
+    # and the available data in the webhook payload
+    Rails.logger.info "Creating gift order for order #{original_order['id']}"
+    # Placeholder for gift order creation logic
   end
 
   def notify_slack(order, is_bogo:, fraud_suspected: false)
@@ -122,23 +85,21 @@ class ProcessBogoOrderJob < ApplicationJob
     }
 
     if is_bogo
-      recipient_info = {
+      bogo_info = {
         type: "section",
-        fields: [
-          {
-            type: "mrkdwn",
-            text: "*Recipient:*\n#{find_property(order, 'recipient_address1')}, #{find_property(order, 'recipient_city')}"
-          }
-        ]
+        text: {
+          type: "mrkdwn",
+          text: "*BOGO Product:*\nBOGO product found in order"
+        }
       }
-      message[:blocks].insert(-1, recipient_info)
+      message[:blocks].insert(-1, bogo_info)
 
       if fraud_suspected
         fraud_warning = {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: ":warning: *Potential fraud detected:* Recipient address matches purchaser address."
+            text: ":warning: *Potential fraud detected*"
           }
         }
         message[:blocks].insert(-1, fraud_warning)
@@ -146,9 +107,5 @@ class ProcessBogoOrderJob < ApplicationJob
     end
 
     client.chat_postMessage(message)
-  end
-
-  def find_property(order, property_name)
-    order['properties'].find { |prop| prop['name'] == property_name }&.dig('value')
   end
 end
