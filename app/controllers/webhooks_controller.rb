@@ -1,9 +1,8 @@
-class WebhooksController < ActionController::Base
+class WebhooksController < ApplicationController
   skip_before_action :verify_authenticity_token
 
   def create
-    webhook_payload = JSON.parse(request.body.read)
-    ProcessBogoOrderJob.perform_later(webhook_payload)
+    ProcessBogoOrderJob.perform_later(params.permit!.to_h)
     head :ok
   end
 end

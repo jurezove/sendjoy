@@ -3,9 +3,7 @@ require 'slack-ruby-client'
 class ProcessBogoOrderJob < ApplicationJob
   queue_as :default
 
-  def perform(webhook_payload)
-    order = webhook_payload['webhook']
-    
+  def perform(order)
     if bogo_product?(order)
       process_bogo_order(order)
     else
@@ -31,18 +29,15 @@ class ProcessBogoOrderJob < ApplicationJob
   end
 
   def fraud_suspected?(order)
-    # Since we don't have recipient information in this payload,
-    # we can't implement fraud detection as originally planned.
-    # For now, we'll return false, but you might want to implement
-    # a different fraud detection method based on available data.
+    # Implement your fraud detection logic here
+    # For now, we'll return false as a placeholder
     false
   end
 
   def create_gift_order(original_order)
-    # This method needs to be implemented based on your specific requirements
-    # and the available data in the webhook payload
+    # Implement gift order creation logic
+    # This is a placeholder implementation
     Rails.logger.info "Creating gift order for order #{original_order['id']}"
-    # Placeholder for gift order creation logic
   end
 
   def notify_slack(order, is_bogo:, fraud_suspected: false)
