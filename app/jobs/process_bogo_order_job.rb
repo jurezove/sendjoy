@@ -1,7 +1,8 @@
 class ProcessBogoOrderJob < ApplicationJob
   queue_as :default
 
-  def perform(order)
+  def perform(order_params)
+    order = order_params.with_indifferent_access
     if bogo_product?(order)
       process_bogo_order(order)
     else
@@ -61,8 +62,8 @@ class ProcessBogoOrderJob < ApplicationJob
         first_name: find_property(bogo_item, 'Recipient Name'),
         address1: find_property(bogo_item, 'Recipient Address'),
         city: find_property(bogo_item, 'Recipient City'),
-        country: find_property(bogo_item, 'Recipient Country'),
         zip: find_property(bogo_item, 'Recipient ZIP'),
+        country: find_property(bogo_item, 'Recipient Country'),
         phone: find_property(bogo_item, 'Recipient Phone')
       },
       line_items: [
@@ -83,7 +84,7 @@ class ProcessBogoOrderJob < ApplicationJob
         body: { order: new_order }
       )
       
-      if response.success?
+      if response.ok?
         created_order = response.body['order']
         Rails.logger.info "Gift order created: #{created_order['id']}"
         notify_slack(original_order, is_bogo: true, gift_order_id: created_order['id'])
