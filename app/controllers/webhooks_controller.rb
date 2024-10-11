@@ -3,7 +3,7 @@ class WebhooksController < ActionController::Base
 
   def create
     webhook_payload = JSON.parse(request.body.read)
-    ProcessBOGOOrderJob.perform_later(webhook_payload)
+    ProcessBogoOrderJob.perform_later(webhook_payload)
     head :ok
   end
 end
