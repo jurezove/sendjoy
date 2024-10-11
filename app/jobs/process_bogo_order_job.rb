@@ -1,3 +1,6 @@
+require 'slack-ruby-client'
+require 'shopify_api'
+
 class ProcessBogoOrderJob < ApplicationJob
   queue_as :default
 
@@ -30,9 +33,9 @@ class ProcessBogoOrderJob < ApplicationJob
     return false unless bogo_item
 
     recipient_address = find_property(bogo_item, 'Recipient Address')
-    billing_address = order['billing_address']['address1']
+    billing_address = order['billing_address']&.[]('address1')
 
-    recipient_address.downcase == billing_address.downcase
+    recipient_address.downcase == billing_address&.downcase
   end
 
   def create_gift_order(original_order)
@@ -56,12 +59,18 @@ class ProcessBogoOrderJob < ApplicationJob
       raise "Failed to fetch gift product: #{gift_product_response.errors.full_messages.join(', ')}"
     end
 
+    # Parse first and last name
+    full_name = find_property(bogo_item, 'Recipient Name')
+    first_name, last_name = parse_name(full_name)
+
     new_order = {
       email: original_order['email'],
       shipping_address: {
-        first_name: find_property(bogo_item, 'Recipient Name'),
+        first_name: first_name,
+        last_name: last_name,
         address1: find_property(bogo_item, 'Recipient Address'),
         city: find_property(bogo_item, 'Recipient City'),
+        province: find_property(bogo_item, 'Recipient City'),  # Using City for province as we don't have separate province info
         zip: find_property(bogo_item, 'Recipient ZIP'),
         country: find_property(bogo_item, 'Recipient Country'),
         phone: find_property(bogo_item, 'Recipient Phone')
@@ -75,7 +84,13 @@ class ProcessBogoOrderJob < ApplicationJob
       ],
       financial_status: 'paid',
       tags: 'BOGO Gift',
-      note: "This is a gifted item from a Buy One, Gift One promotion. Original Order ID: #{original_order['id']}"
+      note: "This is a gifted item from a Buy One, Gift One promotion. Original Order ID: #{original_order['id']}",
+      shipping_lines: [
+        {
+          price: '0.00',
+          title: 'Free Shipping'
+        }
+      ]
     }
 
     begin
@@ -129,7 +144,7 @@ class ProcessBogoOrderJob < ApplicationJob
           fields: [
             {
               type: "mrkdwn",
-              text: "*Purchaser:*\n#{order['billing_address']['address1']}, #{order['billing_address']['city']}"
+              text: "*Purchaser:*\n#{order['billing_address']&.[]('address1') || 'N/A'}, #{order['billing_address']&.[]('city') || 'N/A'}"
             }
           ]
         }
@@ -189,5 +204,17 @@ class ProcessBogoOrderJob < ApplicationJob
   def find_property(line_item, property_name)
     property = line_item['properties'].find { |prop| prop['name'] == property_name }
     property ? property['value'] : nil
+  end
+
+  def parse_name(full_name)
+    name_parts = full_name.split
+    if name_parts.size > 1
+      last_name = name_parts.pop
+      first_name = name_parts.join(' ')
+    else
+      first_name = full_name
+      last_name = ''
+    end
+    [first_name, last_name]
   end
 end
