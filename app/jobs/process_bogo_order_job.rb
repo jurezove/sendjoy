@@ -1,5 +1,3 @@
-require 'slack-ruby-client'
-
 class ProcessBogoOrderJob < ApplicationJob
   queue_as :default
 
