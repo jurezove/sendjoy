@@ -41,10 +41,13 @@ class ProcessBogoOrderJob < ApplicationJob
     shop_url = ENV['SHOPIFY_SHOP_URL']
     access_token = ENV['SHOPIFY_ACCESS_TOKEN']
 
-    ShopifyAPI::Base.site = "https://#{shop_url}/admin"
-    ShopifyAPI::Base.headers['X-Shopify-Access-Token'] = access_token
+    session = ShopifyAPI::Auth::Session.new(
+      shop: shop_url,
+      access_token: access_token
+    )
+    client = ShopifyAPI::Clients::Rest::Admin.new(session: session)
 
-    new_order = ShopifyAPI::Order.new(
+    new_order = {
       email: original_order['email'],
       shipping_address: {
         first_name: find_property(bogo_item, 'Recipient Name'),
@@ -65,11 +68,21 @@ class ProcessBogoOrderJob < ApplicationJob
       financial_status: 'paid',
       tags: 'BOGO Gift',
       note: 'This is a gifted item from a Buy One, Gift One promotion.'
+    }
+
+    response = client.post(
+      path: 'orders',
+      body: { "order" => new_order },
+      type: :json
     )
-    new_order.save
+
+    Rails.logger.info "Gift order created: #{response.body['order']['id']}"
+  rescue StandardError => e
+    Rails.logger.error "Error creating gift order: #{e.message}"
+    notify_slack(original_order, is_bogo: true, error: e.message)
   end
 
-  def notify_slack(order, is_bogo:, fraud_suspected: false)
+  def notify_slack(order, is_bogo:, fraud_suspected: false, error: nil)
     client = Slack::Web::Client.new(token: ENV['SLACK_BOT_TOKEN'])
 
     message = {
@@ -130,6 +143,17 @@ class ProcessBogoOrderJob < ApplicationJob
           }
         }
         message[:blocks].insert(-1, fraud_warning)
+      end
+
+      if error
+        error_message = {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: ":x: *Error creating gift order:* #{error}"
+          }
+        }
+        message[:blocks].insert(-1, error_message)
       end
     end
 
