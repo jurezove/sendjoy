@@ -48,7 +48,7 @@ class ProcessBogoOrderJob < ApplicationJob
     # Fetch the gift product to get its first variant
     gift_product_response = client.get(path: "products/#{gift_product_id}.json")
     
-    if gift_product_response.success?
+    if gift_product_response.ok?
       gift_product = gift_product_response.body['product']
       gift_variant = gift_product['variants'].first
     else
