@@ -12,8 +12,6 @@ class ProcessBogoOrderJob < ApplicationJob
   private
 
   def bogo_product?(order)
-    # Implement logic to check if the order contains a BOGO product
-    # This is a placeholder implementation
     order['line_items'].any? { |item| item['product_id'].to_s == ENV['BOGO_PRODUCT_ID'] }
   end
 
@@ -27,15 +25,48 @@ class ProcessBogoOrderJob < ApplicationJob
   end
 
   def fraud_suspected?(order)
-    # Implement your fraud detection logic here
-    # For now, we'll return false as a placeholder
-    false
+    bogo_item = order['line_items'].find { |item| item['product_id'].to_s == ENV['BOGO_PRODUCT_ID'] }
+    return false unless bogo_item
+
+    recipient_address = find_property(bogo_item, 'Recipient Address')
+    billing_address = order['billing_address']['address1']
+
+    recipient_address.downcase == billing_address.downcase
   end
 
   def create_gift_order(original_order)
-    # Implement gift order creation logic
-    # This is a placeholder implementation
-    Rails.logger.info "Creating gift order for order #{original_order['id']}"
+    bogo_item = original_order['line_items'].find { |item| item['product_id'].to_s == ENV['BOGO_PRODUCT_ID'] }
+    return unless bogo_item
+
+    shop_url = ENV['SHOPIFY_SHOP_URL']
+    access_token = ENV['SHOPIFY_ACCESS_TOKEN']
+
+    ShopifyAPI::Base.site = "https://#{shop_url}/admin"
+    ShopifyAPI::Base.headers['X-Shopify-Access-Token'] = access_token
+
+    new_order = ShopifyAPI::Order.new(
+      email: original_order['email'],
+      shipping_address: {
+        first_name: find_property(bogo_item, 'Recipient Name'),
+        address1: find_property(bogo_item, 'Recipient Address'),
+        city: original_order['billing_address']['city'],
+        province: original_order['billing_address']['province'],
+        country: original_order['billing_address']['country'],
+        zip: original_order['billing_address']['zip'],
+        phone: original_order['billing_address']['phone']
+      },
+      line_items: [
+        {
+          variant_id: bogo_item['variant_id'],
+          quantity: 1,
+          price: '0.00'
+        }
+      ],
+      financial_status: 'paid',
+      tags: 'BOGO Gift',
+      note: 'This is a gifted item from a Buy One, Gift One promotion.'
+    )
+    new_order.save
   end
 
   def notify_slack(order, is_bogo:, fraud_suspected: false)
@@ -70,7 +101,7 @@ class ProcessBogoOrderJob < ApplicationJob
           fields: [
             {
               type: "mrkdwn",
-              text: "*Purchaser:*\n#{order['shipping_address']['address1']}, #{order['shipping_address']['city']}"
+              text: "*Purchaser:*\n#{order['billing_address']['address1']}, #{order['billing_address']['city']}"
             }
           ]
         }
@@ -78,21 +109,24 @@ class ProcessBogoOrderJob < ApplicationJob
     }
 
     if is_bogo
-      bogo_info = {
+      bogo_item = order['line_items'].find { |item| item['product_id'].to_s == ENV['BOGO_PRODUCT_ID'] }
+      recipient_info = {
         type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "*BOGO Product:*\nBOGO product found in order"
-        }
+        fields: [
+          {
+            type: "mrkdwn",
+            text: "*Recipient:*\n#{find_property(bogo_item, 'Recipient Name')}, #{find_property(bogo_item, 'Recipient Address')}"
+          }
+        ]
       }
-      message[:blocks].insert(-1, bogo_info)
+      message[:blocks].insert(-1, recipient_info)
 
       if fraud_suspected
         fraud_warning = {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: ":warning: *Potential fraud detected*"
+            text: ":warning: *Potential fraud detected:* Recipient address matches purchaser address."
           }
         }
         message[:blocks].insert(-1, fraud_warning)
@@ -100,5 +134,10 @@ class ProcessBogoOrderJob < ApplicationJob
     end
 
     client.chat_postMessage(message)
+  end
+
+  def find_property(line_item, property_name)
+    property = line_item['properties'].find { |prop| prop['name'] == property_name }
+    property ? property['value'] : nil
   end
 end
