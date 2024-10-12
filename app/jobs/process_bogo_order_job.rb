@@ -8,8 +8,6 @@ class ProcessBogoOrderJob < ApplicationJob
     order = order_params.with_indifferent_access
     if bogo_product?(order)
       process_bogo_order(order)
-    else
-      notify_slack(order, is_bogo: false)
     end
   end
 
