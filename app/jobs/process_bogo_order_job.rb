@@ -70,7 +70,7 @@ class ProcessBogoOrderJob < ApplicationJob
         city: find_property(bogo_item, 'Recipient City'),
         province: find_property(bogo_item, 'Recipient City'),  # Using City for province as we don't have separate province info
         zip: find_property(bogo_item, 'Recipient ZIP'),
-        country: find_property(bogo_item, 'Recipient Country'),
+        country: find_property(bogo_item, 'Recipient Country') || ENV['DEFAULT_GIFT_ORDER_COUNTRY'],
         phone: find_property(bogo_item, 'Recipient Phone')
       },
       line_items: [
@@ -115,13 +115,13 @@ class ProcessBogoOrderJob < ApplicationJob
 
     message = {
       channel: ENV['SLACK_CHANNEL_ID'],
-      text: is_bogo ? "BOGO product order received!" : "New order received (non-BOGO)",
+      text: is_bogo ? "Palo Santo For a Friend sold!" : "New order received",
       blocks: [
         {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: is_bogo ? "*BOGO product order received!*" : "*New order received (non-BOGO)*"
+            text: is_bogo ? "*Palo Santo For a Friend order received!*" : "*New order received*"
           }
         },
         {
@@ -142,7 +142,7 @@ class ProcessBogoOrderJob < ApplicationJob
           fields: [
             {
               type: "mrkdwn",
-              text: "*Purchaser:*\n#{order['billing_address']&.[]('address1') || 'N/A'}, #{order['billing_address']&.[]('city') || 'N/A'}"
+              text: "*Purchaser:*\n#{order['billing_address']&.[]('first_name')} #{order['billing_address']&.[]('last_name')}\n#{order['billing_address']&.[]('address1')}, #{order['billing_address']&.[]('city')}"
             }
           ]
         }
