@@ -6,8 +6,13 @@ class ProcessBogoOrderJob < ApplicationJob
 
   def perform(order_params)
     order = order_params.with_indifferent_access
+    Rails.logger.info "ProcessBogoOrderJob started with order: #{order['id']}"
+    
     if bogo_product?(order)
+      Rails.logger.info "BOGO product found in order #{order['id']}"
       process_bogo_order(order)
+    else
+      Rails.logger.info "No BOGO product found in order #{order['id']}"
     end
   end
 
@@ -19,6 +24,7 @@ class ProcessBogoOrderJob < ApplicationJob
 
   def process_bogo_order(order)
     if fraud_suspected?(order)
+      Rails.logger.warn "Fraud suspected for order #{order['id']}"
       notify_slack(order, is_bogo: true, fraud_suspected: true)
     else
       create_gift_order(order)
@@ -37,42 +43,67 @@ class ProcessBogoOrderJob < ApplicationJob
   end
 
   def create_gift_order(original_order)
+    Rails.logger.info "Creating gift order for original order: #{original_order['id']}"
+    
     bogo_item = original_order['line_items'].find { |item| item['product_id'].to_s == ENV['BOGO_PRODUCT_ID'] }
-    return unless bogo_item
+    unless bogo_item
+      Rails.logger.error "BOGO item not found in order #{original_order['id']}"
+      return
+    end
+
+    Rails.logger.info "Found BOGO item in order: #{bogo_item.inspect}"
 
     shop_url = ENV['SHOPIFY_SHOP_URL']
     access_token = ENV['SHOPIFY_ACCESS_TOKEN']
     gift_product_id = ENV['GIFT_PRODUCT_ID']
 
+    Rails.logger.info "Creating Shopify session with shop URL: #{shop_url}"
     session = ShopifyAPI::Auth::Session.new(shop: shop_url, access_token: access_token)
     client = ShopifyAPI::Clients::Rest::Admin.new(session: session)
 
     # Fetch the gift product to get its first variant
+    Rails.logger.info "Fetching gift product details for ID: #{gift_product_id}"
     gift_product_response = client.get(path: "products/#{gift_product_id}.json")
     
     if gift_product_response.ok?
       gift_product = gift_product_response.body['product']
       gift_variant = gift_product['variants'].first
+      Rails.logger.info "Found gift product variant: #{gift_variant.inspect}"
     else
-      raise "Failed to fetch gift product: #{gift_product_response.errors.full_messages.join(', ')}"
+      error_message = "Failed to fetch gift product: #{gift_product_response.errors.full_messages.join(', ')}"
+      Rails.logger.error error_message
+      raise error_message
     end
 
     # Parse first and last name
     full_name = find_property(bogo_item, 'Recipient Name')
     first_name, last_name = parse_name(full_name)
+    
+    # Log all recipient properties
+    Rails.logger.info "Recipient Information:"
+    Rails.logger.info "  Full Name: #{full_name}"
+    Rails.logger.info "  Parsed Name: #{first_name} #{last_name}"
+    Rails.logger.info "  Address: #{find_property(bogo_item, 'Recipient Address')}"
+    Rails.logger.info "  City: #{find_property(bogo_item, 'Recipient City')}"
+    Rails.logger.info "  ZIP: #{find_property(bogo_item, 'Recipient ZIP')}"
+    Rails.logger.info "  Country: #{find_property(bogo_item, 'Recipient Country')}"
+    Rails.logger.info "  Phone: #{find_property(bogo_item, 'Recipient Phone')}"
+
+    shipping_address = {
+      first_name: first_name,
+      last_name: last_name,
+      address1: find_property(bogo_item, 'Recipient Address'),
+      city: find_property(bogo_item, 'Recipient City'),
+      province: find_property(bogo_item, 'Recipient City'),  # Using City for province as we don't have separate province info
+      zip: find_property(bogo_item, 'Recipient ZIP'),
+      country: find_property(bogo_item, 'Recipient Country') || ENV['DEFAULT_GIFT_ORDER_COUNTRY'],
+      phone: find_property(bogo_item, 'Recipient Phone')
+    }
+
+    Rails.logger.info "Constructed shipping address: #{shipping_address.inspect}"
 
     new_order = {
-      # email: original_order['email'],
-      shipping_address: {
-        first_name: first_name,
-        last_name: last_name,
-        address1: find_property(bogo_item, 'Recipient Address'),
-        city: find_property(bogo_item, 'Recipient City'),
-        province: find_property(bogo_item, 'Recipient City'),  # Using City for province as we don't have separate province info
-        zip: find_property(bogo_item, 'Recipient ZIP'),
-        country: find_property(bogo_item, 'Recipient Country') || ENV['DEFAULT_GIFT_ORDER_COUNTRY'],
-        phone: find_property(bogo_item, 'Recipient Phone')
-      },
+      shipping_address: shipping_address,
       line_items: [
         {
           variant_id: gift_variant['id'],
@@ -91,7 +122,11 @@ class ProcessBogoOrderJob < ApplicationJob
       ]
     }
 
+    Rails.logger.info "Attempting to create gift order with payload:"
+    Rails.logger.info JSON.pretty_generate(new_order)
+
     begin
+      Rails.logger.info "Sending gift order creation request to Shopify"
       response = client.post(
         path: 'orders.json',
         body: { order: new_order }
@@ -99,13 +134,18 @@ class ProcessBogoOrderJob < ApplicationJob
       
       if response.ok?
         created_order = response.body['order']
-        Rails.logger.info "Gift order created: #{created_order['id']}"
+        Rails.logger.info "Gift order created successfully:"
+        Rails.logger.info JSON.pretty_generate(created_order)
         notify_slack_gift_order(original_order, created_order['id'])
       else
-        raise "Failed to create order: #{response.errors.full_messages.join(', ')}"
+        error_message = "Failed to create order: #{response.errors.full_messages.join(', ')}"
+        Rails.logger.error "Gift order creation failed with errors:"
+        Rails.logger.error JSON.pretty_generate(response.errors)
+        raise error_message
       end
     rescue StandardError => e
-      Rails.logger.error "Error creating gift order: #{e.message}"
+      Rails.logger.error "Exception while creating gift order: #{e.message}"
+      Rails.logger.error "Backtrace: #{e.backtrace.join("\n")}"
       notify_slack(original_order, is_bogo: true, error: e.message)
     end
   end
