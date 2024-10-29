@@ -96,7 +96,7 @@ class ProcessBogoOrderJob < ApplicationJob
       city: find_property(bogo_item, 'Recipient City'),
       province: find_property(bogo_item, 'Recipient City'),  # Using City for province as we don't have separate province info
       zip: find_property(bogo_item, 'Recipient ZIP'),
-      country: find_property(bogo_item, 'Recipient Country') || ENV['DEFAULT_GIFT_ORDER_COUNTRY'],
+      country: find_property(bogo_item, 'Recipient Country').presence || ENV['DEFAULT_GIFT_ORDER_COUNTRY'],
       phone: find_property(bogo_item, 'Recipient Phone')
     }
 
