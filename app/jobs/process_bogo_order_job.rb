@@ -62,7 +62,7 @@ class ProcessBogoOrderJob < ApplicationJob
     first_name, last_name = parse_name(full_name)
 
     new_order = {
-      email: original_order['email'],
+      # email: original_order['email'],
       shipping_address: {
         first_name: first_name,
         last_name: last_name,
@@ -100,7 +100,7 @@ class ProcessBogoOrderJob < ApplicationJob
       if response.ok?
         created_order = response.body['order']
         Rails.logger.info "Gift order created: #{created_order['id']}"
-        notify_slack(original_order, is_bogo: true, gift_order_id: created_order['id'])
+        notify_slack_gift_order(original_order, created_order['id'])
       else
         raise "Failed to create order: #{response.errors.full_messages.join(', ')}"
       end
@@ -110,18 +110,23 @@ class ProcessBogoOrderJob < ApplicationJob
     end
   end
 
-  def notify_slack(order, is_bogo:, fraud_suspected: false, error: nil, gift_order_id: nil)
+  def get_order_url(order_id)
+    "https://admin.shopify.com/store/#{ENV['SHOPIFY_SHOP_URL']}/orders/#{order_id}"
+  end
+
+  def notify_slack_gift_order(original_order, gift_order_id)
     client = Slack::Web::Client.new(token: ENV['SLACK_BOT_TOKEN'])
+    bogo_item = original_order['line_items'].find { |item| item['product_id'].to_s == ENV['BOGO_PRODUCT_ID'] }
 
     message = {
       channel: ENV['SLACK_CHANNEL_ID'],
-      text: is_bogo ? "Palo Santo For a Friend sold!" : "New order received",
+      text: "🎁 Gift Order Created!",
       blocks: [
         {
           type: "section",
           text: {
             type: "mrkdwn",
-            text: is_bogo ? "*Palo Santo For a Friend order received!*" : "*New order received*"
+            text: "*🎁 Gift Order Successfully Created!*"
           }
         },
         {
@@ -129,7 +134,64 @@ class ProcessBogoOrderJob < ApplicationJob
           fields: [
             {
               type: "mrkdwn",
-              text: "*Order ID:*\n#{order['id']}"
+              text: "*Original Order:*\n<#{get_order_url(original_order['id'])}|##{original_order['id']}>"
+            },
+            {
+              type: "mrkdwn",
+              text: "*Gift Order:*\n<#{get_order_url(gift_order_id)}|##{gift_order_id}>"
+            }
+          ]
+        },
+        {
+          type: "section",
+          fields: [
+            {
+              type: "mrkdwn",
+              text: "*From:*\n#{original_order['billing_address']&.[]('first_name')} #{original_order['billing_address']&.[]('last_name')}"
+            },
+            {
+              type: "mrkdwn",
+              text: "*To:*\n#{find_property(bogo_item, 'Recipient Name')}"
+            }
+          ]
+        },
+        {
+          type: "section",
+          fields: [
+            {
+              type: "mrkdwn",
+              text: "*Shipping To:*\n#{find_property(bogo_item, 'Recipient Address')}\n#{find_property(bogo_item, 'Recipient City')}, #{find_property(bogo_item, 'Recipient Country')}"
+            }
+          ]
+        }
+      ]
+    }
+
+    client.chat_postMessage(message)
+  end
+
+  def notify_slack(order, is_bogo:, fraud_suspected: false, error: nil, gift_order_id: nil)
+    return if gift_order_id  # Skip if this is a successful gift order (handled by notify_slack_gift_order)
+    
+    client = Slack::Web::Client.new(token: ENV['SLACK_BOT_TOKEN'])
+
+    message = {
+      channel: ENV['SLACK_CHANNEL_ID'],
+      text: "New Palo Santo For a Friend order!",
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: "*New Palo Santo For a Friend Order Received! 🌿*"
+          }
+        },
+        {
+          type: "section",
+          fields: [
+            {
+              type: "mrkdwn",
+              text: "*Order ID:*\n<#{get_order_url(order['id'])}|##{order['id']}>"
             },
             {
               type: "mrkdwn",
@@ -142,7 +204,7 @@ class ProcessBogoOrderJob < ApplicationJob
           fields: [
             {
               type: "mrkdwn",
-              text: "*Purchaser:*\n#{order['billing_address']&.[]('first_name')} #{order['billing_address']&.[]('last_name')}\n#{order['billing_address']&.[]('address1')}, #{order['billing_address']&.[]('city')}"
+              text: "*Purchased By:*\n#{order['billing_address']&.[]('first_name')} #{order['billing_address']&.[]('last_name')}\n#{order['billing_address']&.[]('address1')}, #{order['billing_address']&.[]('city')}"
             }
           ]
         }
@@ -156,44 +218,33 @@ class ProcessBogoOrderJob < ApplicationJob
         fields: [
           {
             type: "mrkdwn",
-            text: "*Recipient:*\n#{find_property(bogo_item, 'Recipient Name')}, #{find_property(bogo_item, 'Recipient Address')}, #{find_property(bogo_item, 'Recipient City')}, #{find_property(bogo_item, 'Recipient Country')}"
+            text: "*Will be Gifted To:*\n#{find_property(bogo_item, 'Recipient Name')}\n#{find_property(bogo_item, 'Recipient Address')}, #{find_property(bogo_item, 'Recipient City')}, #{find_property(bogo_item, 'Recipient Country')}"
           }
         ]
       }
       message[:blocks].insert(-1, recipient_info)
+    end
 
-      if gift_order_id
-        gift_order_info = {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: "*Gift Order Created:* ID #{gift_order_id}"
-          }
+    if fraud_suspected
+      fraud_warning = {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: ":warning: *Potential fraud detected:* Recipient address matches purchaser address."
         }
-        message[:blocks].insert(-1, gift_order_info)
-      end
+      }
+      message[:blocks].insert(-1, fraud_warning)
+    end
 
-      if fraud_suspected
-        fraud_warning = {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: ":warning: *Potential fraud detected:* Recipient address matches purchaser address."
-          }
+    if error
+      error_message = {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: ":x: *Error creating gift order:* #{error}"
         }
-        message[:blocks].insert(-1, fraud_warning)
-      end
-
-      if error
-        error_message = {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: ":x: *Error creating gift order:* #{error}"
-          }
-        }
-        message[:blocks].insert(-1, error_message)
-      end
+      }
+      message[:blocks].insert(-1, error_message)
     end
 
     client.chat_postMessage(message)
