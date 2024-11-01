@@ -32,14 +32,56 @@ class ProcessBogoOrderJob < ApplicationJob
     end
   end
 
+  def normalize_phone(phone)
+    return nil unless phone
+    # Remove all non-digit characters and get last 10 digits
+    phone.gsub(/\D/, '').gsub(/\A\+?1/, '').last(8)
+  end
+
+  def addresses_match?(address1, address2)
+    return false unless address1 && address2
+    address1.downcase == address2.downcase
+  end
+
+  def phones_match?(phone1, phone2)
+    normalized1 = normalize_phone(phone1)
+    normalized2 = normalize_phone(phone2)
+    
+    return false if normalized1.nil? || normalized2.nil?
+    return true if normalized1 == normalized2
+
+    # Log the comparison for debugging
+    Rails.logger.info "Phone number comparison:"
+    Rails.logger.info "  Original: #{phone1} -> #{normalized1}"
+    Rails.logger.info "  Recipient: #{phone2} -> #{normalized2}"
+    
+    false
+  end
+
   def fraud_suspected?(order)
     bogo_item = order['line_items'].find { |item| item['product_id'].to_s == ENV['BOGO_PRODUCT_ID'] }
     return false unless bogo_item
 
     recipient_address = find_property(bogo_item, 'Recipient Address')
+    recipient_phone = find_property(bogo_item, 'Recipient Phone')
+    
     billing_address = order['billing_address']&.[]('address1')
+    billing_phone = order['billing_address']&.[]('phone')
 
-    recipient_address.downcase == billing_address&.downcase
+    address_match = addresses_match?(recipient_address, billing_address)
+    phone_match = phones_match?(recipient_phone, billing_phone)
+
+    if address_match || phone_match
+      Rails.logger.warn "Potential fraud detected for order #{order['id']}:"
+      Rails.logger.warn "  Address match: #{address_match}"
+      Rails.logger.warn "  Phone match: #{phone_match}"
+      Rails.logger.warn "  Recipient address: #{recipient_address}"
+      Rails.logger.warn "  Billing address: #{billing_address}"
+      Rails.logger.warn "  Recipient phone: #{recipient_phone}"
+      Rails.logger.warn "  Billing phone: #{billing_phone}"
+    end
+
+    address_match || phone_match
   end
 
   def create_gift_order(original_order)
