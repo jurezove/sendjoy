@@ -8,6 +8,11 @@ class ProcessBogoOrderJob < ApplicationJob
     order = order_params.with_indifferent_access
     Rails.logger.info "ProcessBogoOrderJob started with order: #{order['id']}"
     
+    unless order['financial_status'] == 'paid'
+      Rails.logger.info "Order #{order['id']} is not paid (status: #{order['financial_status']}). Skipping BOGO processing."
+      return
+    end
+    
     if bogo_product?(order)
       Rails.logger.info "BOGO product found in order #{order['id']}"
       process_bogo_order(order)
