@@ -29,63 +29,56 @@ class ProcessBogoOrderJob < ApplicationJob
     else
       gift_order_id = create_gift_order(order)
       if order['financial_status'] != 'paid'
-        put_orders_on_hold(order['id'], gift_order_id)
+        put_fulfillment_on_hold(order['id'], gift_order_id)
       end
       notify_slack(order, is_bogo: true, fraud_suspected: false)
     end
   end
 
-  def update_order_status(client, order_id, status)
-    begin
-      Rails.logger.info "Updating order #{order_id} status to #{status}"
-      
-      response = client.post(
-        path: "orders/#{order_id}/close.json"
-      )
-      
-      if response.ok?
-        tags_response = client.put(
-          path: "orders/#{order_id}.json",
-          body: {
-            order: {
-              tags: status,
-              note_attributes: [
-                {
-                  name: "status_reason",
-                  value: "Awaiting payment confirmation"
-                }
-              ]
-            }
-          }
-        )
-        
-        if tags_response.ok?
-          Rails.logger.info "Successfully updated order #{order_id} to #{status}"
-        else
-          Rails.logger.error "Failed to update order tags: #{tags_response.errors.full_messages.join(', ')}"
-        end
-      else
-        Rails.logger.error "Failed to close order: #{response.errors.full_messages.join(', ')}"
-      end
-    rescue StandardError => e
-      Rails.logger.error "Error updating order #{order_id} status: #{e.message}"
-      Rails.logger.error e.backtrace.join("\n")
-    end
-  end
-
-  def put_orders_on_hold(original_order_id, gift_order_id)
-    Rails.logger.info "Putting orders on hold - Original: #{original_order_id}, Gift: #{gift_order_id}"
+  def put_fulfillment_on_hold(original_order_id, gift_order_id)
+    Rails.logger.info "Putting fulfillment on hold - Original: #{original_order_id}, Gift: #{gift_order_id}"
     
     shop_url = ENV['SHOPIFY_SHOP_URL']
     access_token = ENV['SHOPIFY_ACCESS_TOKEN']
     session = ShopifyAPI::Auth::Session.new(shop: shop_url, access_token: access_token)
     client = ShopifyAPI::Clients::Rest::Admin.new(session: session)
 
-    # Put original order on hold
-    update_order_status(client, original_order_id, 'on_hold')
+    # Put original order fulfillment on hold
+    update_fulfillment_status(client, original_order_id)
     
-    # Put gift order on hold
-    update_order_status(client, gift_order_id, 'on_hold') if gift_order_id
+    # Put gift order fulfillment on hold
+    update_fulfillment_status(client, gift_order_id) if gift_order_id
+  end
+
+  def update_fulfillment_status(client, order_id)
+    begin
+      Rails.logger.info "Updating order #{order_id} fulfillment status to hold"
+      
+      response = client.put(
+        path: "orders/#{order_id}.json",
+        body: {
+          order: {
+            fulfillment_status: "on_hold",
+            tags: "fulfillment_hold",
+            note_attributes: [
+              {
+                name: "hold_reason",
+                value: "Awaiting payment confirmation on original order"
+              }
+            ]
+          }
+        }
+      )
+      
+      if response.ok?
+        Rails.logger.info "Successfully put fulfillment on hold for order #{order_id}"
+      else
+        Rails.logger.error "Failed to update fulfillment status: #{response.errors.full_messages.join(', ')}"
+      end
+    rescue StandardError => e
+      Rails.logger.error "Error updating fulfillment status for order #{order_id}: #{e.message}"
+      Rails.logger.error e.backtrace.join("\n")
+    end
   end
 
   def normalize_phone(phone)
@@ -212,8 +205,8 @@ class ProcessBogoOrderJob < ApplicationJob
           price: '0.00'
         }
       ],
-      financial_status: initial_status,
-      tags: initial_tags,
+      financial_status: 'paid',  # Keep as paid since it's a free gift order
+      tags: 'BOGO Gift',
       note: "This is a gifted item from a Buy One, Gift One promotion. Original Order ID: #{original_order['id']}",
       shipping_lines: [
         {
