@@ -52,26 +52,51 @@ class ProcessBogoOrderJob < ApplicationJob
 
   def create_hold_for_order(client, order_id)
     begin
-      Rails.logger.info "Creating fulfillment hold for order #{order_id}"
+      # First, get the fulfillment orders for this order
+      Rails.logger.info "Fetching fulfillment orders for order #{order_id}"
       
-      response = client.post(
-        path: "orders/#{order_id}/fulfillment_holds.json",
-        body: {
-          fulfillment_hold: {
-            reason: "payment_pending",
-            reason_notes: "Awaiting payment confirmation on original order"
-          }
-        }
+      response = client.get(
+        path: "orders/#{order_id}/fulfillment_orders.json"
       )
       
       if response.ok?
-        Rails.logger.info "Successfully created fulfillment hold for order #{order_id}"
+        fulfillment_orders = response.body['fulfillment_orders']
+        
+        if fulfillment_orders.empty?
+          Rails.logger.error "No fulfillment orders found for order #{order_id}"
+          return
+        end
+
+        # Create hold for each fulfillment order
+        fulfillment_orders.each do |fulfillment_order|
+          Rails.logger.info "Creating hold for fulfillment order #{fulfillment_order['id']}"
+          
+          hold_response = client.post(
+            path: "fulfillment_orders/#{fulfillment_order['id']}/hold.json",
+            body: {
+              fulfillment_hold: {
+                reason: "awaiting_payment",
+                reason_notes: "Awaiting payment confirmation on original order",
+                merchant_requests: [
+                  { message: "Please hold this order until payment is confirmed" }
+                ]
+              }
+            }
+          )
+          
+          if hold_response.ok?
+            Rails.logger.info "Successfully created fulfillment hold for fulfillment order #{fulfillment_order['id']}"
+          else
+            Rails.logger.error "Failed to create fulfillment hold: #{hold_response.errors.full_messages.join(', ')}"
+            Rails.logger.error "Response body: #{hold_response.body.inspect}"
+          end
+        end
       else
-        Rails.logger.error "Failed to create fulfillment hold: #{response.errors.full_messages.join(', ')}"
+        Rails.logger.error "Failed to fetch fulfillment orders: #{response.errors.full_messages.join(', ')}"
       end
     rescue StandardError => e
       Rails.logger.error "Error creating fulfillment hold for order #{order_id}: #{e.message}"
-      Rails.logger.error e.backtrace.join("\n")
+      Rails.logger.error "Backtrace: #{e.backtrace.join("\n")}"
     end
   end
 
