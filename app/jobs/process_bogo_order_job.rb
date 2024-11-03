@@ -8,11 +8,6 @@ class ProcessBogoOrderJob < ApplicationJob
     order = order_params.with_indifferent_access
     Rails.logger.info "ProcessBogoOrderJob started with order: #{order['id']}"
     
-    unless order['financial_status'] == 'paid'
-      Rails.logger.info "Order #{order['id']} is not paid (status: #{order['financial_status']}). Skipping BOGO processing."
-      return
-    end
-    
     if bogo_product?(order)
       Rails.logger.info "BOGO product found in order #{order['id']}"
       process_bogo_order(order)
@@ -32,9 +27,65 @@ class ProcessBogoOrderJob < ApplicationJob
       Rails.logger.warn "Fraud suspected for order #{order['id']}"
       notify_slack(order, is_bogo: true, fraud_suspected: true)
     else
-      create_gift_order(order)
+      gift_order_id = create_gift_order(order)
+      if order['financial_status'] != 'paid'
+        put_orders_on_hold(order['id'], gift_order_id)
+      end
       notify_slack(order, is_bogo: true, fraud_suspected: false)
     end
+  end
+
+  def update_order_status(client, order_id, status)
+    begin
+      Rails.logger.info "Updating order #{order_id} status to #{status}"
+      
+      response = client.post(
+        path: "orders/#{order_id}/close.json"
+      )
+      
+      if response.ok?
+        tags_response = client.put(
+          path: "orders/#{order_id}.json",
+          body: {
+            order: {
+              tags: status,
+              note_attributes: [
+                {
+                  name: "status_reason",
+                  value: "Awaiting payment confirmation"
+                }
+              ]
+            }
+          }
+        )
+        
+        if tags_response.ok?
+          Rails.logger.info "Successfully updated order #{order_id} to #{status}"
+        else
+          Rails.logger.error "Failed to update order tags: #{tags_response.errors.full_messages.join(', ')}"
+        end
+      else
+        Rails.logger.error "Failed to close order: #{response.errors.full_messages.join(', ')}"
+      end
+    rescue StandardError => e
+      Rails.logger.error "Error updating order #{order_id} status: #{e.message}"
+      Rails.logger.error e.backtrace.join("\n")
+    end
+  end
+
+  def put_orders_on_hold(original_order_id, gift_order_id)
+    Rails.logger.info "Putting orders on hold - Original: #{original_order_id}, Gift: #{gift_order_id}"
+    
+    shop_url = ENV['SHOPIFY_SHOP_URL']
+    access_token = ENV['SHOPIFY_ACCESS_TOKEN']
+    session = ShopifyAPI::Auth::Session.new(shop: shop_url, access_token: access_token)
+    client = ShopifyAPI::Clients::Rest::Admin.new(session: session)
+
+    # Put original order on hold
+    update_order_status(client, original_order_id, 'on_hold')
+    
+    # Put gift order on hold
+    update_order_status(client, gift_order_id, 'on_hold') if gift_order_id
   end
 
   def normalize_phone(phone)
@@ -149,6 +200,9 @@ class ProcessBogoOrderJob < ApplicationJob
 
     Rails.logger.info "Constructed shipping address: #{shipping_address.inspect}"
 
+    initial_status = original_order['financial_status'] == 'paid' ? 'paid' : 'on_hold'
+    initial_tags = original_order['financial_status'] == 'paid' ? 'BOGO Gift' : 'BOGO Gift, on_hold'
+
     new_order = {
       shipping_address: shipping_address,
       line_items: [
@@ -158,8 +212,8 @@ class ProcessBogoOrderJob < ApplicationJob
           price: '0.00'
         }
       ],
-      financial_status: 'paid',
-      tags: 'BOGO Gift',
+      financial_status: initial_status,
+      tags: initial_tags,
       note: "This is a gifted item from a Buy One, Gift One promotion. Original Order ID: #{original_order['id']}",
       shipping_lines: [
         {
@@ -184,6 +238,7 @@ class ProcessBogoOrderJob < ApplicationJob
         Rails.logger.info "Gift order created successfully:"
         Rails.logger.info JSON.pretty_generate(created_order)
         notify_slack_gift_order(original_order, created_order['id'])
+        return created_order['id']
       else
         error_message = "Failed to create order: #{response.errors.full_messages.join(', ')}"
         Rails.logger.error "Gift order creation failed with errors:"
@@ -194,6 +249,7 @@ class ProcessBogoOrderJob < ApplicationJob
       Rails.logger.error "Exception while creating gift order: #{e.message}"
       Rails.logger.error "Backtrace: #{e.backtrace.join("\n")}"
       notify_slack(original_order, is_bogo: true, error: e.message)
+      return nil
     end
   end
 
