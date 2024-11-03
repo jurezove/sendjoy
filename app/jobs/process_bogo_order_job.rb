@@ -29,54 +29,48 @@ class ProcessBogoOrderJob < ApplicationJob
     else
       gift_order_id = create_gift_order(order)
       if order['financial_status'] != 'paid'
-        put_fulfillment_on_hold(order['id'], gift_order_id)
+        create_fulfillment_holds(order['id'], gift_order_id)
       end
       notify_slack(order, is_bogo: true, fraud_suspected: false)
     end
   end
 
-  def put_fulfillment_on_hold(original_order_id, gift_order_id)
-    Rails.logger.info "Putting fulfillment on hold - Original: #{original_order_id}, Gift: #{gift_order_id}"
+  def create_fulfillment_holds(original_order_id, gift_order_id)
+    Rails.logger.info "Creating fulfillment holds - Original: #{original_order_id}, Gift: #{gift_order_id}"
     
     shop_url = ENV['SHOPIFY_SHOP_URL']
     access_token = ENV['SHOPIFY_ACCESS_TOKEN']
     session = ShopifyAPI::Auth::Session.new(shop: shop_url, access_token: access_token)
     client = ShopifyAPI::Clients::Rest::Admin.new(session: session)
 
-    # Put original order fulfillment on hold
-    update_fulfillment_status(client, original_order_id)
+    # Create hold for original order
+    create_hold_for_order(client, original_order_id)
     
-    # Put gift order fulfillment on hold
-    update_fulfillment_status(client, gift_order_id) if gift_order_id
+    # Create hold for gift order
+    create_hold_for_order(client, gift_order_id) if gift_order_id
   end
 
-  def update_fulfillment_status(client, order_id)
+  def create_hold_for_order(client, order_id)
     begin
-      Rails.logger.info "Updating order #{order_id} fulfillment status to hold"
+      Rails.logger.info "Creating fulfillment hold for order #{order_id}"
       
-      response = client.put(
-        path: "orders/#{order_id}.json",
+      response = client.post(
+        path: "orders/#{order_id}/fulfillment_holds.json",
         body: {
-          order: {
-            fulfillment_status: "on_hold",
-            tags: "fulfillment_hold",
-            note_attributes: [
-              {
-                name: "hold_reason",
-                value: "Awaiting payment confirmation on original order"
-              }
-            ]
+          fulfillment_hold: {
+            reason: "payment_pending",
+            reason_notes: "Awaiting payment confirmation on original order"
           }
         }
       )
       
       if response.ok?
-        Rails.logger.info "Successfully put fulfillment on hold for order #{order_id}"
+        Rails.logger.info "Successfully created fulfillment hold for order #{order_id}"
       else
-        Rails.logger.error "Failed to update fulfillment status: #{response.errors.full_messages.join(', ')}"
+        Rails.logger.error "Failed to create fulfillment hold: #{response.errors.full_messages.join(', ')}"
       end
     rescue StandardError => e
-      Rails.logger.error "Error updating fulfillment status for order #{order_id}: #{e.message}"
+      Rails.logger.error "Error creating fulfillment hold for order #{order_id}: #{e.message}"
       Rails.logger.error e.backtrace.join("\n")
     end
   end
