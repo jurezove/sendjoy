@@ -139,7 +139,8 @@ class ProcessBogoOrderJob < ApplicationJob
     address_match = addresses_match?(recipient_address, billing_address)
     phone_match = phones_match?(recipient_phone, billing_phone)
 
-    if address_match || phone_match
+    # if address_match || phone_match
+    if address_match # Temporarily disable phone match
       Rails.logger.warn "Potential fraud detected for order #{order['id']}:"
       Rails.logger.warn "  Address match: #{address_match}"
       Rails.logger.warn "  Phone match: #{phone_match}"
