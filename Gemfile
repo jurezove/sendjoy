@@ -44,6 +44,6 @@ end
 
 gem "shopify_api", "~> 14.6"
 
-gem "dotenv-rails", "~> 3.1"
+gem "dotenv-rails", "~> 3.2"
 
 gem "slack-ruby-client", "~> 2.4"
