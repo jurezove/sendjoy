@@ -93,22 +93,24 @@ GEM
       railties (>= 6.1)
     drb (2.2.1)
     erubi (1.13.0)
-    faraday (2.12.0)
-      faraday-net_http (>= 2.0, < 3.4)
+    faraday (2.14.1)
+      faraday-net_http (>= 2.0, < 3.5)
       json
       logger
-    faraday-mashify (0.1.1)
+    faraday-mashify (1.0.2)
       faraday (~> 2.0)
       hashie
-    faraday-multipart (1.0.4)
-      multipart-post (~> 2)
-    faraday-net_http (3.3.0)
-      net-http
-    gli (2.21.5)
+    faraday-multipart (1.2.0)
+      multipart-post (~> 2.0)
+    faraday-net_http (3.4.2)
+      net-http (~> 0.5)
+    gli (2.22.2)
+      ostruct
     globalid (1.2.1)
       activesupport (>= 6.1)
     hash_diff (1.1.1)
-    hashie (5.0.0)
+    hashie (5.1.0)
+      logger
     httparty (0.22.0)
       csv
       mini_mime (>= 1.0.0)
@@ -119,11 +121,11 @@ GEM
     irb (1.14.1)
       rdoc (>= 4.0.0)
       reline (>= 0.4.2)
-    json (2.7.2)
+    json (2.19.2)
     jwt (2.9.3)
       base64
     language_server-protocol (3.17.0.3)
-    logger (1.6.1)
+    logger (1.7.0)
     loofah (2.22.0)
       crass (~> 1.0.2)
       nokogiri (>= 1.12.0)
@@ -139,8 +141,8 @@ GEM
     multi_xml (0.7.1)
       bigdecimal (~> 3.1)
     multipart-post (2.4.1)
-    net-http (0.4.1)
-      uri
+    net-http (0.9.1)
+      uri (>= 0.11.1)
     net-imap (0.4.16)
       date
       net-protocol
@@ -262,12 +264,13 @@ GEM
       securerandom
       sorbet-runtime
       zeitwerk (~> 2.5)
-    slack-ruby-client (2.4.0)
-      faraday (>= 2.0)
+    slack-ruby-client (3.1.0)
+      faraday (>= 2.0.1)
       faraday-mashify
       faraday-multipart
       gli
       hashie
+      logger
     sorbet-runtime (0.5.11600)
     sqlite3 (2.1.0-aarch64-linux-gnu)
     sqlite3 (2.1.0-aarch64-linux-musl)
@@ -285,7 +288,7 @@ GEM
     tzinfo (2.0.6)
       concurrent-ruby (~> 1.0)
     unicode-display_width (2.6.0)
-    uri (0.13.1)
+    uri (1.1.1)
     useragent (0.16.10)
     webrick (1.8.2)
     websocket-driver (0.7.6)
@@ -318,7 +321,7 @@ DEPENDENCIES
   rails (~> 7.2.1)
   rubocop-rails-omakase
   shopify_api (~> 14.6)
-  slack-ruby-client (~> 2.4)
+  slack-ruby-client (~> 3.1)
   sqlite3 (>= 1.4)
   tzinfo-data
 
