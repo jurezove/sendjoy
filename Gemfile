@@ -42,7 +42,7 @@ end
 
 
 
-gem "shopify_api", "~> 14.6"
+gem "shopify_api", "~> 16.1"
 
 gem "dotenv-rails", "~> 3.1"
 
